@@ -5,9 +5,12 @@ VisualStudioVersion = 14.0.23107.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SD_Reader", "SD_Reader\SD_Reader.csproj", "{033E5D6A-88BC-4BCA-B67F-CE29C0784C7E}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "IniParser", "IniParser\IniParser.vcxproj", "{87DB369B-197B-418E-BCED-F5D02C4DC203}"
-EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CopySpecialFiles", "FileAccess1\CopySpecialFiles.vcxproj", "{FB9467AC-9DB5-4AB4-97F0-C130CA1BC6DC}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{2596E797-64C2-4DCF-A762-670241AE0AFF}"
+	ProjectSection(SolutionItems) = preProject
+		README.md = README.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -24,14 +27,6 @@ Global
 		{033E5D6A-88BC-4BCA-B67F-CE29C0784C7E}.Release|x64.ActiveCfg = Release|x86
 		{033E5D6A-88BC-4BCA-B67F-CE29C0784C7E}.Release|x86.ActiveCfg = Release|x86
 		{033E5D6A-88BC-4BCA-B67F-CE29C0784C7E}.Release|x86.Build.0 = Release|x86
-		{87DB369B-197B-418E-BCED-F5D02C4DC203}.Debug|x64.ActiveCfg = Debug|x64
-		{87DB369B-197B-418E-BCED-F5D02C4DC203}.Debug|x64.Build.0 = Debug|x64
-		{87DB369B-197B-418E-BCED-F5D02C4DC203}.Debug|x86.ActiveCfg = Debug|Win32
-		{87DB369B-197B-418E-BCED-F5D02C4DC203}.Debug|x86.Build.0 = Debug|Win32
-		{87DB369B-197B-418E-BCED-F5D02C4DC203}.Release|x64.ActiveCfg = Release|x64
-		{87DB369B-197B-418E-BCED-F5D02C4DC203}.Release|x64.Build.0 = Release|x64
-		{87DB369B-197B-418E-BCED-F5D02C4DC203}.Release|x86.ActiveCfg = Release|Win32
-		{87DB369B-197B-418E-BCED-F5D02C4DC203}.Release|x86.Build.0 = Release|Win32
 		{FB9467AC-9DB5-4AB4-97F0-C130CA1BC6DC}.Debug|x64.ActiveCfg = Debug|x64
 		{FB9467AC-9DB5-4AB4-97F0-C130CA1BC6DC}.Debug|x64.Build.0 = Debug|x64
 		{FB9467AC-9DB5-4AB4-97F0-C130CA1BC6DC}.Debug|x86.ActiveCfg = Debug|Win32

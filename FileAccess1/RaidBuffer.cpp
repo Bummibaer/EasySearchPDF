@@ -28,11 +28,11 @@ struct sDisc {
 	enum eDiscState  kind;
 	int current_buf;
 	BYTE data[2][STRIPE_LENGTH];
-	int head = 0;
-	int dest = 0;
+	size_t head = 0;
+	size_t dest = 0;
 
 	bool Add(BYTE *buf, size_t length) {
-		int written = 0;
+		size_t written = 0;
 		dest = head;
 		if ((head + length) > STRIPE_LENGTH) {
 			written = STRIPE_LENGTH - head;
@@ -43,7 +43,7 @@ struct sDisc {
 			memcpy(&data[current_buf][head], buf, length);
 		}
 		head += written;
-		if (debug_flags & D_RUN) printf("RAID : D%d\tWrite %d from %d Bytes to %0x\n", disc_no,  written, length ,  dest);
+		if (debug_flags & D_RUN) printf("RAID : D%d\tWrite %lld from %lld Bytes to %0llx\n", disc_no,  written, length ,  dest);
 		if (head >= STRIPE_LENGTH) {
 			if (debug_flags & D_RUN) printf("DISC : Buffer of Disc%02d full, switch to other Buffer !\n", disc_no);
 			kind = eDiscState::FULL;
