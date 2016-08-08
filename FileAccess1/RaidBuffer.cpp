@@ -10,28 +10,37 @@ const int   DISC_COUNT = 16;
 const UINT32 STRIPE_LENGTH = (UINT32)(1 << 16);
 
 UINT64 u64DiscSize;
-FILE *files[16];
+int  iDiscCount;
+int  iBurstSize;
+
 enum eDiscState {
 	ACTIVE,
 	BUSY,
 	FULL,
 	WRITTEN,
 	SPARE,
-	PLANNED
+	PLANNED,
+	DISCFILE
 } eDiscState;
 
 static int number = 0;
 struct sDisc {
+	// Parameter
+	bool bRAW = false;
 
 	int disc_no = 0;;
 	WCHAR *filename;
+	FILE *file;
 	enum eDiscState  kind;
 	int current_buf;
 	BYTE data[2][STRIPE_LENGTH];
 	size_t head = 0;
 	size_t dest = 0;
 
-	bool Add(BYTE *buf, size_t length) {
+	bool WriteBytesTo(UINT64 addr, BYTE *buf, size_t length) {
+		return false;
+	}
+	bool WriteBytes(BYTE *buf, size_t length) {
 		size_t written = 0;
 		dest = head;
 		if ((head + length) > STRIPE_LENGTH) {
@@ -43,7 +52,7 @@ struct sDisc {
 			memcpy(&data[current_buf][head], buf, length);
 		}
 		head += written;
-		if (debug_flags & D_RUN) printf("RAID : D%d\tWrite %lld from %lld Bytes to %0llx\n", disc_no,  written, length ,  dest);
+		if (debug_flags & D_RUN) printf("RAID : D%d\tWrite %lld from %lld Bytes to %0llx\n", disc_no, written, length, dest);
 		if (head >= STRIPE_LENGTH) {
 			if (debug_flags & D_RUN) printf("DISC : Buffer of Disc%02d full, switch to other Buffer !\n", disc_no);
 			kind = eDiscState::FULL;
@@ -62,7 +71,7 @@ struct sDisc {
 
 	bool WritetoFile(void) {
 		printf("RAID : Write Buffer to Disc%02d\n", disc_no);
-		size_t s = fwrite(data[current_buf], 1, STRIPE_LENGTH, files[disc_no]);
+		size_t s = fwrite(data[current_buf], 1, STRIPE_LENGTH, file);
 		if (s != STRIPE_LENGTH) {
 			ErrorPrint(L"fwrite");
 			return false;
@@ -80,15 +89,20 @@ struct sDisc {
 	sDisc(bool bFile, const char* fFile)
 	{
 		printf("RAID : Init sDisc with File !\n");
+		errno = fopen_s(&file, fFile, "wb");
+		if (errno) {
+			ErrorPrint(L"fopen");
+		}
+
 		sDisc();
 	}
 
 	~sDisc() {
+		disc_no = number++;
 		printf("RAID : D%d\tDeconstruct\n", disc_no);
-		fclose(files[disc_no]);
+		fclose(file);
 	}
 } disks[DISC_COUNT];
-
 
 RaidBuffer::RaidBuffer(UINT64 size, int stripe, int anz)
 {
@@ -102,17 +116,10 @@ RaidBuffer::RaidBuffer(UINT64 size, int stripe, int anz)
 }
 
 
-bool RaidBuffer::Add(int disc, BYTE* buf, size_t length) {
-	return disks[disc].Add(buf, length);
+bool RaidBuffer::WriteBytes(BYTE* buf, size_t length) {
+	return disks[disc].WriteBytes(buf, length);
 }
 
-bool RaidBuffer::AddFiles(int disc, const char* file) {
-	errno = fopen_s(files + disc, file, "wb");
-	if (errno) {
-		ErrorPrint(L"fopen");
-	}
-	return true;
-}
 RaidBuffer::~RaidBuffer()
 {
 }

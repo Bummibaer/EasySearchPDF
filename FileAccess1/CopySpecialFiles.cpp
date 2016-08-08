@@ -192,7 +192,7 @@ bool  CreateFiles(int anz, wchar_t* file1, wchar_t *file2, bool bRAW)
 	filenames[0] = file1;
 	filenames[1] = file2;
 	for (int i = 0; i < anz; i++) {
-		if (debug_flags &  D_RUN ) printf("before open\n");
+		if (debug_flags &  D_RUN) printf("before open\n");
 		hFiles[i] = CreateFileW(
 			filenames[i],          // drive to open
 			FILE_GENERIC_WRITE,
@@ -218,7 +218,7 @@ bool  CreateFiles(int anz, wchar_t* file1, wchar_t *file2, bool bRAW)
 		if (debug_flags &  D_SEQUENCE) wprintf(L"WRITE : %s opened !\n", filenames[i]);
 
 	}
-	if (debug_flags &  D_SEQUENCE ) printf("INFO: Files created\n");
+	if (debug_flags &  D_SEQUENCE) printf("INFO: Files created\n");
 
 	return rc;
 }
@@ -332,7 +332,7 @@ DWORD WINAPI ThreadReadProc(LPVOID lpParam)
 			if (debug_flags &  D_THREAD) printf("READC : ---------------------All Writes handled!\n");
 			if (newAddress >= u64FileSize) { // All Written !
 				if (debug_flags &  D_RUN) printf("READC : All written!\n");
-				if (debug_flags &  D_THREAD ) printf("READC : Set E_READ\n");
+				if (debug_flags &  D_THREAD) printf("READC : Set E_READ\n");
 				for (int i = 0; i < iAnz; i++) SetEvent(hEventRead[i]);
 				bAllRead = true;
 				break;
@@ -391,7 +391,6 @@ DWORD WINAPI ThreadReadProc(LPVOID lpParam)
 }
 
 
-
 DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 {
 	// lpParam not used in this example.
@@ -424,8 +423,8 @@ DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 			hEventRead[thread_no], // event handle
 			cTimeout);    // indefinite wait
 		if (debug_flags &  D_THREAD) printf("WRITE : T%d Got Read Event Write \n", thread_no);
-		switch (dwWaitResult) {
-			// Event object was signaled
+
+		switch (dwWaitResult) { // Event object was signaled
 		case WAIT_OBJECT_0:
 		{
 			if (debug_flags &  D_WRITE) printf("%*sWRITE : T%d\tWriting %d bytes from buf%d to %0llx\n", (thread_no + 1) * 10, " ", thread_no, buffer.length[write_buffer], write_buffer, newAddress);
@@ -442,16 +441,21 @@ DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 					switch (dwWaitResult) {
 					case  WAIT_OBJECT_0:
 						rc = GetOverlappedResult(hFiles[thread_no], &stOverlapped, &dwBytesWritten, TRUE);
-						printf("WRITE : rc=%0x %0x\n", rc , dwBytesWritten);
+						printf("WRITE : rc=%0x %0x\n", rc, dwBytesWritten);
 						if (rc) {
 							assert(dwBytesWritten == buffer.length[write_buffer]);
 							if (debug_flags &  D_WRITE) printf("%*sWRITE : T%d\tEvent written\n", (thread_no + 1) * 10, " ", thread_no);
+
+							// Send Signal to Read
 							SetEvent(hEventWritten[thread_no]);
+
 							auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+
 							duration_sec = (double)duration_ns.count() / (double)1E9;
 							t_bytes_per_ns = (double)buffer.length[write_buffer] / duration_ns.count();
 							t_bytes_per_second = t_bytes_per_ns  * 1E9;
 							psTiming->dWriteElapsed[thread_no] += duration_sec;
+
 							newAddress += dwBytesWritten;
 							stOverlapped.OffsetHigh = (newAddress >> 32) & 0xFFFFFFFF;
 							stOverlapped.Offset = newAddress & 0xFFFFFFFF;
@@ -481,7 +485,7 @@ DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 							if (debug_flags &  D_VERBOSE) printf("\nWRITE : T%d ----------------- bRunWrite %d , offset = %0llx---------------\n",
 								thread_no, bRunWrite, newAddress);
 							if (newAddress >= u64FileSize) {
-								if (debug_flags &  D_WRITE) printf("WRITE : T%d finisch Writing\n",thread_no);
+								if (debug_flags &  D_WRITE) printf("WRITE : T%d finisch Writing\n", thread_no);
 								break;
 							}
 							write_buffer++;
@@ -504,7 +508,7 @@ DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 								printf("WRITE : GetOverlappedResult I/O Incomplete\n");
 								break;
 							default:
-								printf("WRITE : T%d Default , ERROR !\n",thread_no);
+								printf("WRITE : T%d Default , ERROR !\n", thread_no);
 								ErrorPrint(L"getOverlappedResult");
 								break; // case ERROR_IO_PENDING
 							}

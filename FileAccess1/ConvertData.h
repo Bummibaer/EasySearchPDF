@@ -33,9 +33,14 @@ const int STRIPE_LENGTH = 1 << 16;
 const int BDATA_LENGTH = 5;
 const int BID_LENGTH = 6;
 const int PIXEL_LENGTH = 250;
+const int BDATA5 = BDATA_LENGTH * (BID_LENGTH + PIXEL_LENGTH);
+const int BDATA10 = 2 * BDATA5;
 
 /************************************************************************************
 /*	Functions
 **************************************************************************************/
-void splitData(void);
-UINT64 GenerateDummyContent(UINT8 *buffer, bool bOverwrite, int length);
+class CalculateData {
+public:
+	CalculateData();
+	bool WriteBootLoader();
+}
