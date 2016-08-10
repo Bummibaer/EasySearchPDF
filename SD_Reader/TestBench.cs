@@ -173,7 +173,7 @@ namespace SD_Reader
             else
             {
                 PhysicalDrive pd = new PhysicalDrive();
-                string[] physycaldevices = pd.GetSafePhysicalDevices(fileToWrite, FileAccess.ReadWrite);
+                string[] physycaldevices = pd.GetSafePhysicalDevices(fileToWrite);
 
                 mfsPhysicalDevice = pd.DDevices[physycaldevices[0]].Fs(FileMode.Create) ;
                 if ( mfsPhysicalDevice == null )

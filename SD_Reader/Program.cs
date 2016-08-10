@@ -41,6 +41,11 @@ namespace SD_Reader
                 Console.WriteLine("Usage : lwg");
                 Environment.Exit(0);
             }
+            if ( arg["s"] != null )
+            {
+                Trace.WriteLine("Write with Seek !", "TEST");
+                pd.TestStructureSSD();
+            }
             if (arg["d"] != null)
             {
                 debug = int.Parse(arg["d"]);

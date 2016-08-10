@@ -19,12 +19,12 @@ extern "C" {
 	typedef struct sTiming
 	{
 		double dReadElapsed;
-		double dWriteElapsed[cMaxFile];
+		double dWriteElapsed;
 	} sTiming;
 
-	FILEACCESS1_API bool  copyFiletoRAW(sTiming *sTiming , int anz , wchar_t* file[]);
 
-	FILEACCESS1_API  void setNegate(bool value);
+	FILEACCESS1_API bool  copyFiletoRAW(sTiming *sTiming , wchar_t* file);
+
 	FILEACCESS1_API void setDebug(int value);
 	FILEACCESS1_API void setBlockSize(UINT32 value);
 	FILEACCESS1_API void setFileSize(INT64 value);
@@ -42,4 +42,6 @@ extern "C" {
 
 	void ErrorPrint(LPTSTR lpszFunction);
 
+
 }
+

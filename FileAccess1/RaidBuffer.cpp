@@ -1,13 +1,22 @@
+/*******************************************************************************************************
+*	\file ReadBuffer.cpp
+*	$Log$
+*	\brief Organizes writes ot a RAID0 Volume
+*
+*******************************************************************************************************/
 #include "stdafx.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
 
+#include "CopySpecialFiles.h"
 #include "Log.h"
 #include "RaidBuffer.h"
-#include "CopySpecialFiles.h"
-const int   DISC_COUNT = 16;
-const UINT32 STRIPE_LENGTH = (UINT32)(1 << 16);
+
+
+const int BUF_COUNT = 2;
+const char  *filepath = "\\\\smb01\\scratch_21\\netz\\OWC\\";
+
 
 UINT64 u64DiscSize;
 int  iDiscCount;
@@ -23,104 +32,129 @@ enum eDiscState {
 	DISCFILE
 } eDiscState;
 
-static int number = 0;
-struct sDisc {
-	// Parameter
-	bool bRAW = false;
+// static variables
 
-	int disc_no = 0;;
-	WCHAR *filename;
-	FILE *file;
-	enum eDiscState  kind;
-	int current_buf;
-	BYTE data[2][STRIPE_LENGTH];
-	size_t head = 0;
-	size_t dest = 0;
+static volatile UINT16 DiscFull = 0;
+static UINT16 DiscFullTest = 0;
 
-	bool WriteBytesTo(UINT64 addr, BYTE *buf, size_t length) {
-		return false;
-	}
-	bool WriteBytes(BYTE *buf, size_t length) {
-		size_t written = 0;
-		dest = head;
-		if ((head + length) > STRIPE_LENGTH) {
-			written = STRIPE_LENGTH - head;
-			memcpy(&data[current_buf][head], buf, written);
-		}
-		else {
-			written = length;
-			memcpy(&data[current_buf][head], buf, length);
-		}
-		head += written;
-		if (debug_flags & D_RUN) printf("RAID : D%d\tWrite %lld from %lld Bytes to %0llx\n", disc_no, written, length, dest);
-		if (head >= STRIPE_LENGTH) {
-			if (debug_flags & D_RUN) printf("DISC : Buffer of Disc%02d full, switch to other Buffer !\n", disc_no);
-			kind = eDiscState::FULL;
-			WritetoFile();
-			current_buf = current_buf == 0 ? 1 : 0;
-			head = 0;
-			printf("RAID : D%d\tSwitch to buffer %d \n", disc_no, current_buf);
-			if (written > 0) { // DO REST
-				memcpy(&data[current_buf][head], buf, length - written);
-				head += (length - written);
+sBuffer sWriteBuffer;
+
+// RaidBuffer:
+BYTE data[BUF_COUNT][DISC_COUNT][STRIPE_LENGTH];
+
+function_pointer fpWriteCB;
+bool bRAW = false;
+
+// instance variables
+
+FILE *file[DISC_COUNT];
+enum eDiscState  kind[DISC_COUNT];
+int current_buf[DISC_COUNT] = { 0 };
+size_t head[DISC_COUNT] = { 0 };
+
+
+bool WriteBytesTo(UINT64 addr, BYTE *buf, size_t length) {
+	printf("WriteBytesTo : TODO TODO TODO !\n");
+	return false;
+}
+
+void BufferWritten(void) {
+	DiscFull = 0;
+}
+bool WritetoFile(int current) {
+	bool rc = true;
+	if (debug_flags & D_RAID) printf("RAID : Write Buffers to Disc\n");
+	if (!bRAW) {
+		for (int disc = 0; disc < DISC_COUNT; disc++) {
+			if (debug_flags & D_RAID) printf("RAID : \t Write Buffers to File : %d\n", disc);
+
+			size_t s = fwrite(data[current][disc], 1, STRIPE_LENGTH, file[disc]);
+			if (s != STRIPE_LENGTH) {
+				ErrorPrint(L"fwrite");
+				return false;
 			}
 		}
-		/// TODO handle Buffers, when no Alignement !
-		return true;
+		BufferWritten();
 	}
-
-	bool WritetoFile(void) {
-		printf("RAID : Write Buffer to Disc%02d\n", disc_no);
-		size_t s = fwrite(data[current_buf], 1, STRIPE_LENGTH, file);
-		if (s != STRIPE_LENGTH) {
-			ErrorPrint(L"fwrite");
-			return false;
-		}
-		kind = eDiscState::ACTIVE;
-		return true;
+	else {
+		if (debug_flags &  D_THREAD) printf("READC : Set E_READ\n");
+		assert(fpWriteCB);
+		sWriteBuffer.bytes = (BYTE *)&(data[current]);
+		sWriteBuffer.length = DISC_COUNT * STRIPE_LENGTH;
+		fpWriteCB(&sWriteBuffer);
+		rc = false;
 	}
-
-	sDisc() {
-		disc_no = number++;
-		kind = eDiscState::ACTIVE;
-		current_buf = 0;
-		printf("RAID : Init sDisc !\n");
-	}
-	sDisc(bool bFile, const char* fFile)
-	{
-		printf("RAID : Init sDisc with File !\n");
-		errno = fopen_s(&file, fFile, "wb");
-		if (errno) {
-			ErrorPrint(L"fopen");
-		}
-
-		sDisc();
-	}
-
-	~sDisc() {
-		disc_no = number++;
-		printf("RAID : D%d\tDeconstruct\n", disc_no);
-		fclose(file);
-	}
-} disks[DISC_COUNT];
-
-RaidBuffer::RaidBuffer(UINT64 size, int stripe, int anz)
-{
-	u64DiscSize = size;
-	char  buf[255];
-	for (int i = 0; i < anz; i++) {
-		sprintf_s(buf, sizeof(buf), "\\\\smb01\\scratch_21\\netz\\OWC\\test.%02d", i);
-		AddFiles(i, buf);
-	}
-	// others not used yet
+	return rc;
 }
 
 
-bool RaidBuffer::WriteBytes(BYTE* buf, size_t length) {
-	return disks[disc].WriteBytes(buf, length);
+void RaidBuffer::SetWriteCallBack(function_pointer *fp) {
+	fpWriteCB = *fp;
 }
 
-RaidBuffer::~RaidBuffer()
+bool RaidBuffer::WriteBytes(int disc, BYTE* buf, size_t length) {
+	bool rc = true;
+	size_t written = 0;
+	if ((head[disc] + length) > STRIPE_LENGTH) {
+		written = STRIPE_LENGTH - head[disc];
+		memcpy(&data[current_buf[disc]][disc][head[disc]], buf, written);
+	}
+	else {
+		written = length;
+		memcpy(&data[current_buf[disc]][disc][head[disc]], buf, length);
+	}
+	if (debug_flags & D_RAID) printf("RAID : D%d\tWrote %lld Bytes to %0llx\n", disc, written, head[disc]);
+	head[disc] += written;
+	if (head[disc] >= STRIPE_LENGTH) {
+		if (debug_flags & D_RAID) printf("DISC : Buffer of Disc%02d full!\n", disc);
+	// @TODO 		assert()
+
+		DiscFull |= (1 << disc);
+		if (DiscFull == DiscFullTest) {
+			kind[disc] = eDiscState::FULL;
+			rc = WritetoFile(current_buf[disc]);
+		}
+		current_buf[disc]++;
+		if (current_buf[disc] == BUF_COUNT) {
+			current_buf[disc] = 0;
+		}
+		head[disc] = 0;
+		if (debug_flags & D_RAID) printf("RAID : D%d\tSwitch to buffer %d \n", disc, current_buf[disc]);
+		if (written > 0) { // DO REST
+			memcpy(&data[current_buf[disc]][disc][head[disc]], buf, length - written);
+			if (debug_flags & D_RAID) printf("RAID : D%d\tWrote remainder %lld Bytes to %0llx\n", disc, (length - written), head[disc]);
+			head[disc] += (length - written);
+		}
+	}
+	/// TODO handle Buffers, when no Alignement !
+	return rc;
+}
+
+RaidBuffer::RaidBuffer(bool raw)
 {
+	bRAW = raw;
+	if (!bRAW) {
+		char filename[256];
+		for (int disc = 0; disc < DISC_COUNT; disc++) {
+			DiscFullTest |= 1 << disc;
+			sprintf_s(filename, "%sraid_%02d.bin", filepath, disc);
+			if (debug_flags & D_RAID) printf("RAID : \t File : %s\n", filename);
+			 errno_t err = fopen_s(file+disc , filename, "wb");
+			if (err) {
+				ErrorPrint(L"fopen");
+			}
+		}
+	}
+}
+
+RaidBuffer::~RaidBuffer() {
+	printf("RAID : Deconstruct!");
+	for (int disc = 0; disc < DISC_COUNT; disc++) {
+		int err = fclose(file[disc]);
+		if (err) {
+			ErrorPrint(L"fclose");
+		}
+	}
+
 }
 

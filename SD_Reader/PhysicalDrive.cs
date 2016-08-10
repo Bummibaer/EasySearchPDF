@@ -1,15 +1,16 @@
-﻿using System;
-using System.IO;
-using System.Runtime.InteropServices;
+﻿using de.fraunhofer.ipms.SNDiverses;
 using Microsoft.Win32.SafeHandles;
+using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Text;
+using System.Globalization;
+using System.IO;
 using System.Management;
-using System.Collections.Generic;
-using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
 
-using de.fraunhofer.ipms.SNDiverses;
 namespace SD_Reader
 {
     class PhysicalDrive
@@ -89,14 +90,14 @@ namespace SD_Reader
             GetAllVolumeDeviceIDs(false);
         }
 
-        public String GetSafePhysicalDevice(String name, FileAccess access)
+        public String GetSafePhysicalDevice(String name)
         {
 
             foreach (string drives in DDevices.Keys)
             {
                 if (DDevices[drives].model.IndexOf(name) >= 0)
                 {
-                    Trace.WriteLine("Found : Drive" + drives + DDevices[drives].model, "OpenSafePhysicalDevice");
+                    Trace.WriteLine("Found : Drive" + drives + DDevices[drives].model, "GetSafePhysicalDevice");
                     int partitions = DDevices[drives].partitions;
                     if (partitions > 0)
                     {
@@ -105,9 +106,10 @@ namespace SD_Reader
                     return DDevices[drives].name;
                 }
             }
+            Trace.WriteLine("No Device found", "GetSafePhysicalDevice");
             return null;
         }
-        public String[] GetSafePhysicalDevices(String name, FileAccess access)
+        public String[] GetSafePhysicalDevices(String name)
         {
             List<String> lStrings = new List<string>();
             foreach (string drives in DDevices.Keys)
@@ -540,10 +542,68 @@ namespace SD_Reader
             tw.Close();
         }
 
+        public void TestStructureSSD()
+        {
+            String files = GetSafePhysicalDevice("MICRON");
+            ASCIIEncoding ascii = new ASCIIEncoding();
+            Random r = new Random();
+
+            Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
+            Trace.WriteLine("Culture " + Thread.CurrentThread.CurrentCulture.TwoLetterISOLanguageName);
+            using ( FileStream fs = OpenPhysicalDrive(files,FileAccess.ReadWrite))
+            {
+                Trace.WriteLine("CanSeek : " + fs.CanSeek + "\tCanWrite " + fs.CanWrite);
+                
+                try {
+                    long seek = 0;
+                    int rand = 0;
+                    Byte[] bytes = ascii.GetBytes("Write to " + seek.ToString("X"));
+                    Trace.WriteLine("Write to " + seek.ToString("X") + " " + rand);
+                    fs.Write(bytes, 0, bytes.Length);
+                    fs.Flush();
+                    seek = 512;
+                    rand = r.Next(256);
+                    bytes = ascii.GetBytes("Write to " + seek.ToString("X") + " " + rand);
+                    Trace.WriteLine("Write to " + seek.ToString("X") + " " + rand + "\t" + (seek+rand));
+                    fs.Seek(seek + rand, SeekOrigin.Current);
+                    fs.Write(bytes, 0, bytes.Length);
+
+                    seek = 1024;
+                    rand = r.Next(256);
+                    bytes = ascii.GetBytes("Write to " + seek.ToString("X") + " " + rand);
+                    Trace.WriteLine("Write to " + seek.ToString("X") + " " + rand);
+                    fs.Seek(seek + rand, SeekOrigin.Begin);
+                    fs.Write(bytes, 0, bytes.Length);
+
+                    seek = (long)1 << 16;
+                    rand = r.Next(256);
+                    bytes = ascii.GetBytes("Write to " + seek.ToString("X") + " " + rand);
+                    Trace.WriteLine("Write to " + seek.ToString("X") + " " + rand);
+                    fs.Seek(seek + rand, SeekOrigin.Begin);
+                    fs.Write(bytes, 0, bytes.Length);
+
+                    seek = 0x1BE919FFFF0;
+                    rand = 0;
+                    bytes = ascii.GetBytes("Write to " + seek.ToString("X") + " " + rand);
+                    Trace.WriteLine("Write to " + seek.ToString("X") + " " + rand);
+                    fs.Seek(seek + rand, SeekOrigin.Begin);
+                    fs.Write(bytes, 0, bytes.Length);
+                } catch ( IOException ie)
+                {
+                    Trace.WriteLine(ie.Message + Environment.NewLine + ie.StackTrace);
+                    throw ie;
+                } catch ( Exception e )
+                {
+                    Trace.WriteLine(e.Message + Environment.NewLine + e.StackTrace);
+                    throw e;
+                }
+
+            }
+        }
 
         public void TestRAID()
         {
-            String[] files = GetSafePhysicalDevices("MICRON", FileAccess.Read);
+            String[] files = GetSafePhysicalDevices("MICRON");
             FileStream[] fs = { dDevices[files[0]].fs, dDevices[files[0]].fs };
             int count = 0;
             UInt32 oldValue = 0;

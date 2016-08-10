@@ -29,6 +29,7 @@ namespace SD_Reader
         };
 
         const String dll = @"D:\Netz\VSProjects\SSD_TEST\x64\Debug\CopySpecialFiles.dll";
+        // const String dll = @"D:\Netz\VSProjects\SSD_TEST\Debug\CopySpecialFiles.dll";
 
         [DllImport(dll, SetLastError = true, CharSet = CharSet.Unicode)]
         public static extern void RegisterCallbacks(
@@ -48,8 +49,6 @@ namespace SD_Reader
         [DllImport(dll)]
         public static extern void setRawFile(bool value);
 
-        [DllImport(dll)]
-        public static extern void setNegate(bool value);
 
         [DllImport(dll)]
         public static extern void setOverride(bool value);
@@ -58,10 +57,7 @@ namespace SD_Reader
         public static extern void testSSDRAID();
 
         [DllImport(dll, SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern bool copyFiletoRAW(ref sTiming timing,
-                    int anz,
-                   String[] fromPath
-                   );
+        public static extern bool copyFiletoRAW(ref sTiming timing, String fromPath);
 
 
         [DllImport(dll, SetLastError = true, CharSet = CharSet.Unicode)]
@@ -198,16 +194,10 @@ namespace SD_Reader
         {
             testSSDRAID();
         }
-        public void Start()
-        {
-            sTiming timing = new sTiming();
-            int fileAnz = 0;
-            string[] files = new string[2];
-            copyFiletoRAW(ref timing, fileAnz, files);
-        }
         public void Start(string fileToWrite, bool bFile, bool bVerify, int fileAnz)
         {
-            String[] files;
+            String file;
+            string[] files = new string[fileAnz];
             Stopwatch sw = new Stopwatch();
             Microsoft.VisualBasic.Devices.ComputerInfo ci = new Microsoft.VisualBasic.Devices.ComputerInfo();
             ulong ulAvailablePhysicalMemory = ci.AvailablePhysicalMemory;
@@ -217,65 +207,77 @@ namespace SD_Reader
 
                 if (bFile)
                 {
-                    files = new String[cMaxFiles];
-                    for (int i = 0; i < fileAnz; i++)
-                    {
-                        files[i] = "test" + i + ".bin";
-                    }
+                    file = "raid";
                 }
                 else
 
                 {
                     PhysicalDrive pd = new PhysicalDrive();
-                    files = pd.GetSafePhysicalDevices(fileToWrite, FileAccess.ReadWrite);
+                    files = pd.GetSafePhysicalDevices(fileToWrite);
                     if (files.Length == 0)
                     {
                         Trace.WriteLine("Could not find any Device, or it is not safe : " + fileToWrite);
                         Environment.Exit(4);
                     }
-                    foreach (String file in files) Trace.WriteLine("Got " + file + " with FileSize : "  + pd.DDevices[file].size);
+                    foreach (String f in files) Trace.WriteLine("Got " + f + " with FileSize : " + pd.DDevices[f].size);
+                    file = files[0]; // should be better, or?
                 }
 
+
                 RegisterEvent();
+
+                /*************************************
+                /* Ebenso wird in solchen Fällen eine mit „1 TB“ spezifizierte Festplatte mit der scheinbar deutlich kleineren Kapazität
+                /* von etwa „931 GB“ oder „0,9 TB“ erkannt (auch hier sollte eigentlich „931 GiB“, beziehungsweise „0,9 TiB“ angezeigt werden),
+                /* obwohl in allen drei Fällen jeweils rund 1,0 Terabyte (1 000 000 000 000 Byte) gemeint sind.
+                /* 
+                /* ld(1917995466240) == 1<<(40.8)
+                /* 1<<40 = 1099511627776
+                /* 1<<41 = 2199023255552
+                /* 1BE919FFFFF
+                *************************************/
+
                 UInt64 fileSize = (UInt64)((UInt64)1 << 34); // (long)((long)1 << 20); // 960194511360;  // Hardcoded could come from pd !
-                              // 1917995466240 RAID of two
+                                                             // 1917995466240 RAID of two
                 setFileSize(FileSize);
                 setRawFile(!bFile);
                 //setOverride(true);
 
                 int bestexp = (int)Math.Log((double)fileSize, 2.0);
-                UInt64 from64 = (UInt64)((UInt64)1 << (bestexp - 4));
+                UInt64 from64 = (UInt64)((UInt64)1 << (bestexp - 10));
                 UInt64 to64 = (UInt64)((UInt64)1 << (bestexp - 1));
-                UInt32 to,from; 
+                UInt32 to, from;
 
                 Trace.WriteLine("AvailablePhysicalMemory : " + ulAvailablePhysicalMemory.ToString("X"));
-                Trace.WriteLine("UIN32.max/2 = " +  (UInt32.MaxValue / 2).ToString("X"));
+                Trace.WriteLine("UIN32.max/2 = " + (UInt32.MaxValue / 2).ToString("X"));
                 from = (UInt32)from64;
+                if (from64 >= UInt32.MaxValue / 2)
+                {
+                    from = UInt32.MaxValue / 2;
+                }
+                else
                 if (from64 > ulAvailablePhysicalMemory / 2)
                 {
                     from64 = (uint)(ulAvailablePhysicalMemory / 2);
-                    if (from64 >= UInt32.MaxValue / 2)
-                    {
-                        from = UInt32.MaxValue / 2;
-                    }
                 }
                 to = (UInt32)to64;
+                if (to64 >= UInt32.MaxValue / 2)
+                {
+                    to = UInt32.MaxValue / 2;
+                }
+                else
                 if (to64 > ulAvailablePhysicalMemory / 2)
                 {
                     to64 = (uint)(ulAvailablePhysicalMemory / 2);
-                    if (to64 >= UInt32.MaxValue / 2)
-                    {
-                        to = UInt32.MaxValue / 2;
-                    }
- 
+  
                 }
-                if ( to < from )
+                if (to < from)
                 {
                     Trace.WriteLine("to < from !");
                     from = to;
                 }
                 Trace.WriteLine("-------------  Unmanaged Test -------------------------");
-                Trace.WriteLine("Loop BlockSize from " + from.ToString("X") + "\tto : " + to.ToString("X") );
+                Trace.WriteLine("Loop BlockSize from " + from.ToString("X") + "\tto : " + to.ToString("X"));
                 Trace.WriteLine("FileSize " + ((double)FileSize / (double)1E9));
 
 
@@ -288,6 +290,8 @@ namespace SD_Reader
                 //                                     1         2         3         4         5
                 Trace.WriteLine("Bytes written GB | BlockSize Bytes | Time sec | Speed GB/s");
                 Trace.WriteLine("----------------------------------------------------------");
+                Trace.Assert(from != 0, "Wrong BlockSize from == 0 ");
+                Trace.Assert(to != 0, "Wrong BlockSize to == 0 ");
                 for (UInt32 bs = from; bs <= to; bs <<= 1)
 
                 {
@@ -296,9 +300,9 @@ namespace SD_Reader
                     sTiming timing = new sTiming();
                     sw.Reset();
                     sw.Start();
-                    bool rc = copyFiletoRAW(ref timing, fileAnz, files);
+                    bool rc = copyFiletoRAW(ref timing, file);
                     sw.Stop();
-                     Trace.WriteLine("Run " + sw.ElapsedMilliseconds + "ms");
+                    Trace.WriteLine("Run " + sw.ElapsedMilliseconds + "ms");
                     if (!rc)
                     {
                         Trace.WriteLine("Could not open Files !");
@@ -330,5 +334,12 @@ namespace SD_Reader
             }
 
         }
+
+        public void Start()
+        {
+            throw new NotImplementedException();
+        }
     }
 }
+
+

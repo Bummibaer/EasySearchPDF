@@ -13,14 +13,18 @@
 #include "CopySpecialFiles.h"
 #include "ConvertData.h"
 #include "Log.h"
+#include "Helper.h"
+#include "RaidBuffer.h"
 
 void ErrorPrint(LPTSTR lpszFunction);
 void logWrite(char* format, ...);
-void CreateThreads(int anz);
-bool CreateFiles(int anz, wchar_t* file1, wchar_t *files2, bool bRAW);
-void InitVars(UINT32 blockSize, UINT64 FileSize, int iAnz);
+void CreateThreads(void);
+bool CreateFiles(wchar_t* filename);
+
+void InitVars(UINT32 blockSize, UINT64 FileSize);
 // void trace(const char* format, ...);
 
+void set_event(sBuffer *buffer);
 
 PFN_MYCALLBACK mcbWrite, mcbRead;
 FILEACCESS1_API int __stdcall RegisterCallbacks(PFN_MYCALLBACK cbWrite, PFN_MYCALLBACK cbRead) {
@@ -39,26 +43,23 @@ UINT32	u32BlockSize = 4096;
 UINT64 u64FileSize = { 2 << 10 };
 
 
-static HANDLE	hEventRead[cMaxFile];
-static HANDLE	hEventWritten[cMaxFile];
+static HANDLE	hEventRead;
+static HANDLE	hEventWritten;
 static HANDLE   hThreadRead;
-static HANDLE	hThreads[cMaxFile];
-static HANDLE	hFiles[cMaxFile];
-
+static HANDLE	hThreadWrite;
+static HANDLE   hFile;
 
 DWORD WINAPI ThreadReadProc(LPVOID);
 DWORD WINAPI ThreadWriteProc(LPVOID);
 
+BYTE *buffer;
+sBuffer *sWriteBuffer;
+
+function_pointer fp;
+
+bool bWriting = false;
+
 const int cTimeout = 10000;
-
-struct sBuffer {
-	UCHAR	*bytes[cBuffers];
-	DWORD	length[cBuffers];
-} buffer;
-
-bool bNegated = false;
-
-
 
 double write_bps_average = 0.0;
 double read_bps_average = 0.0;
@@ -71,12 +72,15 @@ int debug = 0;
 bool bRawFile = false;
 bool bOverwrite = false;
 
+
 FILEACCESS1_API  void setDebug(int value) {
 	debug = value;
 }
 
 FILEACCESS1_API  void setBlockSize(UINT32 value) {
+	printf("BS: %x\t", value);
 	u32BlockSize = value;
+	printf("%x\n", u32BlockSize);
 }
 FILEACCESS1_API  void setFileSize(INT64 value) {
 	u64FileSize = value;
@@ -85,9 +89,6 @@ FILEACCESS1_API  void setRawFile(bool value) {
 	bRawFile = value;
 }
 
-FILEACCESS1_API  void setNegated(bool value) {
-	bNegated = value;
-}
 
 FILEACCESS1_API  void setOverride(bool value) {
 	bOverwrite = value;
@@ -96,33 +97,34 @@ FILEACCESS1_API  void setOverride(bool value) {
 char cAnimation[] = { '|' , '/' ,'-' , '\\' };
 
 sTiming *psTiming;
-int iAnz;
 
-#include "Helper.h"
-FILEACCESS1_API bool  copyFiletoRAW(sTiming *stiming, int anz, wchar_t* file[]) {
+
+CalculateData *cd;
+
+FILEACCESS1_API bool  copyFiletoRAW(sTiming *stiming, wchar_t* file) {
 	psTiming = stiming;
-	iAnz = anz;
 
-	InitVars(u32BlockSize, u64FileSize, iAnz);
 
-	bool rc = CreateFiles(iAnz, file[0], file[1], bRawFile);
-	if (!rc) {
+	InitVars(u32BlockSize, u64FileSize);
+	if (bRawFile) {
+		bool rc = CreateFiles(file);
+		if (!rc) {
 
-		return false;
+			return false;
+		}
 	}
-
 	if (debug_flags &  D_SEQUENCE) {
 		printf("UTB: FS:%15llx\tBS:%12u\n", u64FileSize, u32BlockSize);
-		for (int i = 0; i < iAnz; i++)
-			wprintf(L"%s ", file[i]);
+		wprintf(L"%s ", file);
 		printf("\n");
 	}
-	CreateThreads(iAnz);
+	fp = set_event;
+	cd = new CalculateData(bWriting,fp);
 
-	DWORD dwWaitResult = WaitForMultipleObjects(
-		iAnz,   // number of handles in array
-		hThreads,     // array of thread handles
-		TRUE,          // wait until all are signaled
+	CreateThreads();
+
+	DWORD dwWaitResult = WaitForSingleObject(
+		hThreadWrite,     // array of thread handles
 		INFINITE);
 
 	switch (dwWaitResult)
@@ -147,22 +149,21 @@ FILEACCESS1_API bool  copyFiletoRAW(sTiming *stiming, int anz, wchar_t* file[]) 
 	}
 
 
-	for (int i = 0; i < iAnz; i++) {
-		if (hFiles[i] != NULL)
-			CloseHandle(hFiles[i]);
-		else
-			printf("Handle %d not closed", i);
-	}
+	if (hFile != NULL)
+		CloseHandle(hFile);
+	else
+		printf("ERROR : File Handle  not closed");
+
 
 	if (debug_flags &  D_SEQUENCE) printf("UTB : Exit!\n");
 	return true;
 }
 
-void InitVars(UINT32 blockSize, UINT64 FileSize, int iAnz) {
+void InitVars(UINT32 blockSize, UINT64 FileSize) {
 
 
 	psTiming->dReadElapsed = 0.0;
-	for (int i = 0; i < iAnz; i++) psTiming->dWriteElapsed[i] = 0;
+	psTiming->dWriteElapsed = 0;
 
 	u32BlockSize = blockSize;
 	u64FileSize = FileSize;
@@ -170,112 +171,90 @@ void InitVars(UINT32 blockSize, UINT64 FileSize, int iAnz) {
 	write_bps_average = 0.0;
 	read_bps_average = 0.0;
 
-	buffer.bytes[0] = (UCHAR*)malloc(u32BlockSize);
-	if (buffer.bytes[0] == NULL) {
-		printf("Could not alloc memory ! buffer.bytes[0]");
-		exit(3);
-	}
-	buffer.bytes[1] = (UCHAR*)malloc(u32BlockSize);
-	if (buffer.bytes[1] == NULL) {
-		printf("Could not alloc memory ! buffer.bytes[1]");
-		exit(3);
-	}
-
+	buffer = (BYTE *)malloc(blockSize);
 	bRunWrite = true;
-
 }
 
-bool  CreateFiles(int anz, wchar_t* file1, wchar_t *file2, bool bRAW)
+bool  CreateFiles(wchar_t* filename)
 {
 	bool rc = true;
-	wchar_t *filenames[2];
-	filenames[0] = file1;
-	filenames[1] = file2;
-	for (int i = 0; i < anz; i++) {
-		if (debug_flags &  D_RUN) printf("before open\n");
-		hFiles[i] = CreateFileW(
-			filenames[i],          // drive to open
-			FILE_GENERIC_WRITE,
-			0,
-			NULL,             // default security attributes
-							  //CREATE_ALWAYS,
-			bRawFile ? OPEN_EXISTING : CREATE_ALWAYS,    // disposition
-			FILE_FLAG_OVERLAPPED,                // file attributes
-			NULL);            // do not copy file attributes
-		if (debug_flags &  D_RUN) printf("after open\n");
+	if (debug_flags &  D_RUN) printf("before open\n");
+	hFile = CreateFileW(
+		filename,          // drive to open
+		FILE_GENERIC_WRITE,
+		0,
+		NULL,             // default security attributes
+						  //CREATE_ALWAYS,
+		OPEN_EXISTING,    // disposition
+		FILE_FLAG_OVERLAPPED,                // file attributes
+		NULL);            // do not copy file attributes
+	if (debug_flags &  D_RUN) printf("after open\n");
 
-		if (hFiles[thread_no_1] == INVALID_HANDLE_VALUE)    // cannot open the drive
-		{
-			wchar_t wc[128] = L"WRITE: Tried to open : ";
-			lstrcatW(wc, filenames[i]);
-			wprintf(L"%s\n", wc);
-			OutputDebugString(wc);
-			ErrorPrint(L"CreateFileW");
-			rc = false;
-			if (file1 != NULL) CloseHandle(&filenames[i]);
-			return false;
-		}
-		if (debug_flags &  D_SEQUENCE) wprintf(L"WRITE : %s opened !\n", filenames[i]);
-
+	if (hFile == INVALID_HANDLE_VALUE)    // cannot open the drive
+	{
+		wchar_t wc[128] = L"WRITE: Tried to open : ";
+		lstrcatW(wc, filename);
+		wprintf(L"%s\n", wc);
+		OutputDebugString(wc);
+		ErrorPrint(L"CreateFileW");
+		rc = false;
+		return false;
 	}
+	if (debug_flags &  D_SEQUENCE) wprintf(L"WRITE : %s opened !\n", filename);
+
 	if (debug_flags &  D_SEQUENCE) printf("INFO: Files created\n");
 
 	return rc;
 }
-DWORD threadID[cMaxFile + 1];
-int threadNo[cMaxFile + 1];
 
-void  CreateThreads(int anz) {
+void  CreateThreads(void) {
 	DWORD(__stdcall *t)(LPVOID);
-	static int iAnz = anz;
 
 	// Read Thread
 	t = ThreadReadProc;
-	threadID[0] = 0;
+	DWORD threadID = 0;
 	hThreadRead = CreateThread(
 		NULL,              // default security
 		0,                 // default stack size
 		t,                // Pointer to  the thread function
-		&iAnz,              // Anzahl of Write Threads
+		NULL,              // Anzahl of Write Threads
 		CREATE_SUSPENDED,    // start after Write Threads are created !
-		&threadID[0]
+		&threadID
 		);
 
 	// Write Threads
-	for (int i = 0; i < anz; i++) {
-		hEventRead[i] = CreateEvent(
-			NULL,    // default security attribute 
-			FALSE,    // manual-reset event 
-			FALSE,    // initial state = Written signaled, Read not
-			NULL);   // unnamed event object 
-		hEventWritten[i] = CreateEvent(
-			NULL,    // default security attribute 
-			FALSE,    // manual-reset event 
-			TRUE,    // initial state = Written signaled, Read not
-			NULL);   // unnamed event object 
+	hEventRead = CreateEvent(
+		NULL,    // default security attribute 
+		FALSE,    // manual-reset event 
+		FALSE,    // initial state = Written signaled, Read not
+		NULL);   // unnamed event object 
+	hEventWritten = CreateEvent(
+		NULL,    // default security attribute 
+		FALSE,    // manual-reset event 
+		TRUE,    // initial state = Written signaled, Read not
+		NULL);   // unnamed event object 
 
-		if (hEventWritten[i] == NULL)
-		{
-			printf("CreateEvent failed with %d.\n", GetLastError());
-			return;
-		}
-		t = ThreadWriteProc;
-		threadNo[i] = i;
-
-		hThreads[i] = CreateThread(
-			NULL,              // default security
-			0,                 // default stack size
-			t,        // name of the thread function
-			threadNo + i,              // no thread parameters
-			0,                 // default startup flags
-			&threadID[i + 1]);
-
-		if (hThreads[i] == NULL)
-		{
-			printf("CreateThread failed (%d)\n", GetLastError());
-			return;
-		}
+	if (hEventWritten == NULL)
+	{
+		printf("CreateEvent failed with %d.\n", GetLastError());
+		return;
 	}
+	t = ThreadWriteProc;
+	threadID++;
+	hThreadWrite = CreateThread(
+		NULL,              // default security
+		0,                 // default stack size
+		t,        // name of the thread function
+		NULL,              // no thread parameters
+		0,                 // default startup flags
+		&threadID);
+
+	if (hThreadWrite == NULL)
+	{
+		printf("CreateThread failed (%d)\n", GetLastError());
+		return;
+	}
+
 
 	ResumeThread(hThreadRead);
 
@@ -283,11 +262,16 @@ void  CreateThreads(int anz) {
 
 }
 
+void set_event(sBuffer *buffer) {
+	sWriteBuffer = buffer;
+	bWriting = true;
+	SetEvent(hEventWritten);
+}
 
 DWORD WINAPI ThreadReadProc(LPVOID lpParam)
 {
 	// lpParam not used in this example.
-	int iAnzWriteThreads = *(int *)lpParam;
+
 	UINT64 newAddress = 0;
 
 	int read_buffer = 0;
@@ -298,31 +282,12 @@ DWORD WINAPI ThreadReadProc(LPVOID lpParam)
 
 	bool bAllRead = false;
 
-	GenerateDummyContent(buffer.bytes[read_buffer], bOverwrite, u32BlockSize);
-
-	newAddress += u32BlockSize;
-	buffer.length[read_buffer] = u32BlockSize;
-	if (debug_flags &  D_THREAD) printf("READC : Set E_READ\n");
-
-	for (int i = 0; i < iAnz; i++) SetEvent(hEventRead[i]);
-
-	if (debug_flags &  D_RUN)
-		printf("READC : Read %d bytes to Buf%d \t%llx\t%llx\n",
-			buffer.length[read_buffer],
-			read_buffer,
-			newAddress,
-			u64FileSize
-			);
-
-	read_buffer++;
 	std::chrono::time_point<std::chrono::high_resolution_clock>   start, end;
 
 	while (!bAllRead) {
 		if (debug_flags &  D_THREAD) printf("READC : --------------- Wait for Write handles\n");
-		dwWaitResult = WaitForMultipleObjects(
-			iAnzWriteThreads,
+		dwWaitResult = WaitForSingleObject(
 			hEventWritten, // event handle
-			TRUE,
 			INFINITE /*cTimeout*/);    // indefinite wait
 		switch (dwWaitResult)
 		{
@@ -330,45 +295,14 @@ DWORD WINAPI ThreadReadProc(LPVOID lpParam)
 		case WAIT_OBJECT_0:
 		{
 			if (debug_flags &  D_THREAD) printf("READC : ---------------------All Writes handled!\n");
-			if (newAddress >= u64FileSize) { // All Written !
-				if (debug_flags &  D_RUN) printf("READC : All written!\n");
-				if (debug_flags &  D_THREAD) printf("READC : Set E_READ\n");
-				for (int i = 0; i < iAnz; i++) SetEvent(hEventRead[i]);
-				bAllRead = true;
-				break;
+			while (!bWriting) {
+				//GenerateDummyContent(buffer.bytes[read_buffer], bOverwrite, u32BlockSize);
+				bool rc = MockReadFile(0, buffer, u32BlockSize);
+				if (debug_flags & D_READ) printf("READC : %d bytes read!\n",u32BlockSize);
+				cd->convertData(buffer, u32BlockSize);
 			}
-			auto start = std::chrono::high_resolution_clock::now();
-			GenerateDummyContent(buffer.bytes[read_buffer], bOverwrite, u32BlockSize);
 
-			auto end = std::chrono::high_resolution_clock::now();
-			buffer.length[read_buffer] = u32BlockSize;
-			if (debug_flags &  D_THREAD) printf("READC : Set E_READ\n");
-			for (int i = 0; i < iAnz; i++) SetEvent(hEventRead[i]);
-			auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
-			duration_sec = (double)duration_ns.count() / (double)1E9;
-			t_bytes_per_ns = (double)buffer.length[read_buffer] / duration_ns.count();
-			t_bytes_per_second = t_bytes_per_ns * 1E9;
-			psTiming->dReadElapsed += duration_sec;
-			mcbRead(t_bytes_per_ns);
-			if (debug_flags &  D_RUN) printf("READC : D:%lldns\t%6.3fGB/sec\telapsed:%fms  with %6.3fGB/sec\n",
-				duration_ns.count(),
-				t_bytes_per_ns,
-				psTiming->dReadElapsed,
-				read_bps_average
-				);
-			else if (debug_flags &  D_RUN)
-				printf("READC : Read %d bytes to Buf%d \t%llx\t%llx\n",
-					buffer.length[read_buffer],
-					read_buffer,
-					newAddress,
-					u64FileSize
-					);
-			newAddress += u32BlockSize;
-			read_buffer++;
-			if (read_buffer == cBuffers) {
-				read_buffer = 0;
-			}
-			fflush(stdout);
+				fflush(stdout);
 		}
 		break;
 		case WAIT_TIMEOUT:
@@ -394,7 +328,6 @@ DWORD WINAPI ThreadReadProc(LPVOID lpParam)
 DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 {
 	// lpParam not used in this example.
-	int thread_no = *(int *)lpParam;
 	DWORD dwWaitResult, dwError;
 	DWORD dwBytesWritten;
 	int write_buffer = 0;
@@ -405,6 +338,7 @@ DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 	double max_duration = 0.0;
 	BOOL rc;
 	UINT64 newAddress = 0;
+	int thread_no = GetCurrentThreadId();
 
 	OVERLAPPED stOverlapped = { 0 };
 
@@ -420,17 +354,17 @@ DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 	do {
 		if (debug_flags &  D_THREAD) printf("WRITE : T%d waiting for Read event...\n", thread_no);
 		dwWaitResult = WaitForSingleObject(
-			hEventRead[thread_no], // event handle
+			hEventRead, // event handle
 			cTimeout);    // indefinite wait
 		if (debug_flags &  D_THREAD) printf("WRITE : T%d Got Read Event Write \n", thread_no);
 
 		switch (dwWaitResult) { // Event object was signaled
 		case WAIT_OBJECT_0:
 		{
-			if (debug_flags &  D_WRITE) printf("%*sWRITE : T%d\tWriting %d bytes from buf%d to %0llx\n", (thread_no + 1) * 10, " ", thread_no, buffer.length[write_buffer], write_buffer, newAddress);
+			if (debug_flags &  D_WRITE) printf("%*sWRITE : T%d\tWriting %d bytes from buf%d to %0llx\n", (thread_no + 1) * 10, " ", thread_no, sWriteBuffer->length, write_buffer, newAddress);
 
 			auto start = std::chrono::high_resolution_clock::now();
-			rc = WriteFile(hFiles[thread_no], buffer.bytes[write_buffer], buffer.length[write_buffer], NULL, &stOverlapped);
+			rc = WriteFile(hFile, sWriteBuffer->bytes, sWriteBuffer->length, NULL, &stOverlapped);
 			if (!rc)
 			{
 				switch (dwError = GetLastError()) {
@@ -440,32 +374,33 @@ DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 					auto end = std::chrono::high_resolution_clock::now();
 					switch (dwWaitResult) {
 					case  WAIT_OBJECT_0:
-						rc = GetOverlappedResult(hFiles[thread_no], &stOverlapped, &dwBytesWritten, TRUE);
+						BufferWritten();
+						rc = GetOverlappedResult(hFile, &stOverlapped, &dwBytesWritten, TRUE);
 						printf("WRITE : rc=%0x %0x\n", rc, dwBytesWritten);
 						if (rc) {
-							assert(dwBytesWritten == buffer.length[write_buffer]);
+							assert(dwBytesWritten == sWriteBuffer->length);
 							if (debug_flags &  D_WRITE) printf("%*sWRITE : T%d\tEvent written\n", (thread_no + 1) * 10, " ", thread_no);
 
 							// Send Signal to Read
-							SetEvent(hEventWritten[thread_no]);
+							SetEvent(hEventWritten);
 
 							auto duration_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
 
 							duration_sec = (double)duration_ns.count() / (double)1E9;
-							t_bytes_per_ns = (double)buffer.length[write_buffer] / duration_ns.count();
+							t_bytes_per_ns = (double)sWriteBuffer->length / duration_ns.count();
 							t_bytes_per_second = t_bytes_per_ns  * 1E9;
-							psTiming->dWriteElapsed[thread_no] += duration_sec;
+							psTiming->dWriteElapsed += duration_sec;
 
 							newAddress += dwBytesWritten;
 							stOverlapped.OffsetHigh = (newAddress >> 32) & 0xFFFFFFFF;
 							stOverlapped.Offset = newAddress & 0xFFFFFFFF;
-							write_bps_average = (double)stOverlapped.Offset / psTiming->dWriteElapsed[thread_no] / 1E9;
+							write_bps_average = (double)stOverlapped.Offset / psTiming->dWriteElapsed / 1E9;
 
 							max_duration = max(max_duration, duration_sec);
 							if (debug_flags &  D_RUN) printf("WRITE : D:%lldns\t%6.3fGB/sec\tE:%fms  with %6.3fGB/sec,%llx\n",
 								duration_ns.count(),
 								t_bytes_per_ns,
-								psTiming->dWriteElapsed[thread_no],
+								psTiming->dWriteElapsed,
 								write_bps_average,
 								newAddress
 								);
@@ -567,18 +502,18 @@ DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 	// event to signal that this thread is no longer reading. This
 	// example simply uses the thread handle for synchronization (the
 	// handle is signaled when the thread terminates.
-	buffer.bytes[write_buffer][0] = 'E';
-	buffer.bytes[write_buffer][1] = 'N';
-	buffer.bytes[write_buffer][2] = 'D';
-	buffer.bytes[write_buffer][3] = '\0';
-	rc = WriteFile(hFiles[thread_no], buffer.bytes[write_buffer], 512, NULL, &stOverlapped);
+	sWriteBuffer->bytes[0] = 'E';
+	sWriteBuffer->bytes[1] = 'N';
+	sWriteBuffer->bytes[2] = 'D';
+	sWriteBuffer->bytes[3] = '\0';
+	rc = WriteFile(hFile, sWriteBuffer->bytes, 512, NULL, &stOverlapped);
 	if (!rc) {
 		switch (GetLastError()) {
 		case  ERROR_IO_PENDING:
 			dwWaitResult = WaitForSingleObject(stOverlapped.hEvent, INFINITE);
 			switch (dwWaitResult) {
 			case  WAIT_OBJECT_0:
-				rc = GetOverlappedResult(hFiles[thread_no], &stOverlapped, &dwBytesWritten, TRUE);
+				rc = GetOverlappedResult(hFile, &stOverlapped, &dwBytesWritten, TRUE);
 				if (!rc) {
 					switch (dwError = GetLastError()) {
 					case ERROR_HANDLE_EOF:
@@ -612,7 +547,7 @@ DWORD WINAPI ThreadWriteProc(LPVOID lpParam)
 			} // switch Result Wait for Write
 		default:
 
-			rc = GetOverlappedResult(hFiles[thread_no], &stOverlapped, &dwBytesWritten, TRUE);
+			rc = GetOverlappedResult(hFile, &stOverlapped, &dwBytesWritten, TRUE);
 			if (!rc) {
 				switch (dwError = GetLastError()) {
 				case ERROR_HANDLE_EOF:
@@ -697,7 +632,7 @@ void ErrorPrint(LPTSTR lpszFunction)
 
 FILEACCESS1_API void testSSDRAID()
 {
-	splitData();
+	// splitData();
 	printf("Ende \n");
 }
 
@@ -781,9 +716,8 @@ bool VerifyFile(wchar_t* filename) {
 	}
 
 	wprintf(L"VERIFIER : %s opened !\n", filename);
-	buffer.bytes[0] = (UCHAR*)malloc(u32BlockSize);
+	sWriteBuffer->bytes = (UCHAR*)malloc(u32BlockSize);
 	ULONG32 value = 1;
-	char input[1];
 
 	if (!bRawFile) {
 		LARGE_INTEGER li;
@@ -796,19 +730,18 @@ bool VerifyFile(wchar_t* filename) {
 	}
 	std::list<int> ilErrors;
 	do {
-		rc = ReadFile(hFile, buffer.bytes[0], u32BlockSize, &dwBytesRead, NULL);
+		rc = ReadFile(hFile, sWriteBuffer->bytes, u32BlockSize, &dwBytesRead, NULL);
 		if (rc) {
 			for (UINT32 block = 0; block < dwBytesRead; block += 512) {
-				UINT32 v = bNegated ? ~value : value;
-				if (bOverwrite) v = 0xFFFFFFFF;
+				if (bOverwrite) value = 0xFFFFFFFF;
 				ilErrors.clear();
 				for (UINT32 index = 0; index < 512; index += 4) {
-					UINT32 act_value = (buffer.bytes[0][block + index] << 24) |
-						(buffer.bytes[0][block + index + 1] << 16) |
-						(buffer.bytes[0][block + index + 2] << 8) |
-						buffer.bytes[0][block + index + 3]
+					UINT32 act_value = (sWriteBuffer->bytes[block + index] << 24) |
+						(sWriteBuffer->bytes[block + index + 1] << 16) |
+						(sWriteBuffer->bytes[block + index + 2] << 8) |
+						sWriteBuffer->bytes[block + index + 3]
 						;
-					if (act_value != v) {
+					if (act_value != value) {
 						ilErrors.push_back(index);
 						//printf("@%d %0x\t%0x\n", index,act_value, v);
 					}
@@ -832,16 +765,16 @@ bool VerifyFile(wchar_t* filename) {
 		// printf("VERIFIER : offset %llx\n", llOffset);
 	} while (llOffset < u64FileSize);
 
-	rc = ReadFile(hFile, buffer.bytes[0], 512, &dwBytesRead, NULL);
+	rc = ReadFile(hFile, sWriteBuffer->bytes, 512, &dwBytesRead, NULL);
 	if (rc) {
-		int rc = strncmp((const char *)buffer.bytes[0], "END", 4);
+		int rc = strncmp((const char *)sWriteBuffer->bytes, "END", 4);
 		if (rc != 0) {
 			wprintf(L"VERIFIER : File END of %s is not O.K.\n", filename);
 			printf("VERIFIER : Read %02x %02x %02x %02x\n",
-				buffer.bytes[0][0],
-				buffer.bytes[0][1],
-				buffer.bytes[0][2],
-				buffer.bytes[0][3]
+				sWriteBuffer->bytes[0],
+				sWriteBuffer->bytes[1],
+				sWriteBuffer->bytes[2],
+				sWriteBuffer->bytes[3]
 				);
 		}
 		else {
@@ -853,7 +786,7 @@ bool VerifyFile(wchar_t* filename) {
 		ErrorPrint(L"VERIFIER ReadFile");
 	}
 
-	free(buffer.bytes[0]);
+	free(sWriteBuffer->bytes);
 	CloseHandle(hFile);
 	return rc ? false : true;
 }
@@ -885,3 +818,14 @@ void printc() {
 	printf(ANSI_COLOR_CYAN    "This text is CYAN!"    ANSI_COLOR_RESET "\n");
 
 }
+/*
+void testSetPointer(long addr) {
+	printf("SetFilePointer to \n");
+	SetFilePointer(hFiles[0], addr&0xFFFFFFFF, (addr>32)& 0xFFFFFFFF, FILE_BEGIN);
+	printf("SetFilePointer to \n");
+	WriteFile(hFiles[0], )
+		return true;
+
+
+}
+*/
